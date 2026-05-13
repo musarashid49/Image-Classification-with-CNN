@@ -9,7 +9,7 @@ Usage:
     from src.models import build_model
     model = build_model("resnet50", num_classes=16, dropout=0.4)
 """
-
+from typing import Tuple 
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
