@@ -89,8 +89,9 @@ class Trainer:
             lr=self.lr, weight_decay=self.wd,
         )
         self.scheduler = ReduceLROnPlateau(
-            self.optimizer, mode="min", patience=LR_PATIENCE, factor=0.5, verbose=True
+            self.optimizer, mode="min", patience=LR_PATIENCE, factor=0.5
         )
+        
         self.early_stop = EarlyStopping(patience=EARLY_STOP_PAT)
 
         self.model.to(self.device)
