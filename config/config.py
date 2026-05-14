@@ -1,129 +1,95 @@
 """
-config/config.py
-================
-Central configuration for the Pakistani Politicians Classification project.
-Edit DRIVE_DATASET_PATH to point to your Google Drive dataset folder.
-All other modules import from here — change once, applies everywhere.
+Central configuration for the Pakistani Politicians Image Classification project.
+
+All paths assume Google Colab + Google Drive. Override in notebooks if running
+locally on Mac (no GPU) — only the dataset path and DEVICE matter then.
 """
+from __future__ import annotations
 
-import os
+from pathlib import Path
+from typing import List
 
-# ─────────────────────────────────────────────
-# 1. PATHS
-# ─────────────────────────────────────────────
-
-# Root of your dataset folder on Google Drive (Colab path after mounting)
-# Example: "/content/drive/MyDrive/pk_politicians_dataset"
-DRIVE_DATASET_PATH = "/content/drive/MyDrive/pk_politicians_dataset"
-
-# Local Colab working directory (fast SSD — copy dataset here before training)
-COLAB_DATA_DIR    = "/content/data"
-TRAIN_DIR         = os.path.join(COLAB_DATA_DIR, "train")
-VAL_DIR           = os.path.join(COLAB_DATA_DIR, "val")
-TEST_DIR          = os.path.join(COLAB_DATA_DIR, "test")
-
-# Results output (also save back to Drive after training)
-RESULTS_DIR       = "results"
-PLOTS_DIR         = os.path.join(RESULTS_DIR, "plots")
-METRICS_DIR       = os.path.join(RESULTS_DIR, "metrics")
-CHECKPOINTS_DIR   = os.path.join(RESULTS_DIR, "checkpoints")
-
-# Drive mirror for saving results
-DRIVE_RESULTS_PATH = "/content/drive/MyDrive/pk_politicians_results"
-
-# ─────────────────────────────────────────────
-# 2. DATASET / CLASSES
-# ─────────────────────────────────────────────
-
-CLASS_NAMES = [
-    "ahmed_sharif_chaudhry",
-    "altaf_hussain",
-    "asfandyar_wali",
+# ---------------------------------------------------------------------------
+# Class names (folder names, must match exactly what's on Drive)
+# ---------------------------------------------------------------------------
+# Keep these alphabetised so ImageFolder gives the same class_to_idx every run.
+CLASS_NAMES: List[str] = sorted([
     "asif_ali_zardari",
-    "bilawal_bhutto",
-    "chaudhry_nisar",
-    "fazlur_rehman",
+    "benazir_bhutto",
+    "bilawal_bhutto_zardari",
+    "fazal_ur_rehman",
     "imran_khan",
+    "ishaq_dar",
+    "khawaja_asif",
+    "mahmood_khan_achakzai",
     "maryam_nawaz",
     "nawaz_sharif",
-    "pervez_khattak",
     "pervez_musharraf",
     "rana_sanaullah",
-    "shah_mehmood_qureshi",
-    "shehbaz_sharif",
-    "sirajul_haq",
-]
+    "shahbaz_sharif",
+    "sheikh_rasheed",
+    "yousaf_raza_gillani",
+    "asim_munir",  # military spokesperson / COAS — adjust if folder differs
+])
 
-NUM_CLASSES = len(CLASS_NAMES)   # 16
+NUM_CLASSES: int = len(CLASS_NAMES)
+assert NUM_CLASSES == 16, f"Expected 16 classes, got {NUM_CLASSES}"
 
-# ─────────────────────────────────────────────
-# 3. SPLIT RATIOS
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Paths (Colab + Drive layout)
+# ---------------------------------------------------------------------------
+DRIVE_ROOT = Path("/content/drive/MyDrive")
+DATASET_DIR = DRIVE_ROOT / "dataset_resplit"          # the GOOD split
+DATASET_DIR_LEGACY = DRIVE_ROOT / "dataset"           # original (bad) split
 
-TRAIN_RATIO = 0.75
-VAL_RATIO   = 0.15
-TEST_RATIO  = 0.10
-RANDOM_SEED = 42          # keep fixed for reproducibility
+# Where Drive stores all run outputs (checkpoints + plots + logs)
+RESULTS_DRIVE = DRIVE_ROOT / "pk_politicians_results"
+CHECKPOINTS_DRIVE = RESULTS_DRIVE / "checkpoints"
+PLOTS_DRIVE = RESULTS_DRIVE / "plots"
+LOGS_DRIVE = RESULTS_DRIVE / "logs"
 
-# ─────────────────────────────────────────────
-# 4. IMAGE SETTINGS
-# ─────────────────────────────────────────────
+# Local (Colab session) workspace — wiped on disconnect
+LOCAL_ROOT = Path("/content/Image-Classification-with-CNN")
+LOCAL_RESULTS = LOCAL_ROOT / "results"
+LOCAL_PLOTS = LOCAL_RESULTS / "plots"
+LOCAL_CHECKPOINTS = LOCAL_RESULTS / "checkpoints"
+LOCAL_METRICS = LOCAL_RESULTS / "metrics"
+REPORT_FIGURES = LOCAL_ROOT / "report" / "figures"
 
-IMAGE_SIZE   = 224        # used for ResNet50 and EfficientNet-B0/B2
-CHANNELS     = 3
+# ---------------------------------------------------------------------------
+# Split ratios (must match Project_Brief.docx exactly)
+# ---------------------------------------------------------------------------
+SPLIT_TRAIN = 0.75
+SPLIT_VAL = 0.15
+SPLIT_TEST = 0.10
+assert abs(SPLIT_TRAIN + SPLIT_VAL + SPLIT_TEST - 1.0) < 1e-9
 
-# ImageNet normalisation (standard for pretrained CNNs)
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD  = [0.229, 0.224, 0.225]
+MIN_IMAGES_PER_CLASS = 80          # strict minimum from project rules
+MIN_TEST_IMAGES_PER_CLASS = 5      # hard validation threshold (Notebook 01)
 
-# ─────────────────────────────────────────────
-# 5. TRAINING HYPERPARAMETERS
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Image / training defaults
+# ---------------------------------------------------------------------------
+IMG_SIZE = 224
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
-BATCH_SIZE       = 32
-NUM_EPOCHS       = 30
-LEARNING_RATE    = 1e-4          # initial LR for fine-tuning
-WEIGHT_DECAY     = 1e-4
-MOMENTUM         = 0.9           # for SGD if used
-LR_PATIENCE      = 4             # ReduceLROnPlateau patience
-EARLY_STOP_PAT   = 8             # early stopping patience
-NUM_WORKERS      = 4             # DataLoader workers
+BATCH_SIZE = 32
+NUM_WORKERS = 2          # Colab has limited CPU; 2 is safe
+PIN_MEMORY = True
 
-# ─────────────────────────────────────────────
-# 6. MODEL CONFIGS
-# ─────────────────────────────────────────────
+# Training defaults — override per model in notebooks
+DEFAULT_EPOCHS = 30
+DEFAULT_LR_HEAD = 1e-3
+DEFAULT_LR_BACKBONE = 1e-4
+DEFAULT_WEIGHT_DECAY = 1e-4
+DEFAULT_LABEL_SMOOTHING = 0.05
+EARLY_STOPPING_PATIENCE = 7
 
-MODELS = {
-    "resnet50": {
-        "name":        "resnet50",
-        "pretrained":  True,
-        "freeze_base": False,     # set True for feature-extraction only phase
-        "dropout":     0.4,
-        "image_size":  224,
-    },
-    "efficientnet_b0": {
-        "name":        "efficientnet_b0",
-        "pretrained":  True,
-        "freeze_base": False,
-        "dropout":     0.4,
-        "image_size":  224,
-    },
-    "efficientnet_b2": {
-        "name":        "efficientnet_b2",
-        "pretrained":  True,
-        "freeze_base": False,
-        "dropout":     0.4,
-        "image_size":  260,       # B2 native resolution
-    },
-}
+SEED = 42
 
-# ─────────────────────────────────────────────
-# 7. AUGMENTATION FLAGS
-# ─────────────────────────────────────────────
-
-AUG_ROTATION       = 20      # degrees
-AUG_FLIP           = True    # horizontal flip
-AUG_BRIGHTNESS     = 0.3     # ColorJitter brightness delta
-AUG_CONTRAST       = 0.2
-AUG_ZOOM           = 0.15    # RandomResizedCrop scale lower bound = 1 - AUG_ZOOM
-AUG_CROP_SCALE_LOW = 0.85    # RandomResizedCrop scale = (0.85, 1.0)
+# ---------------------------------------------------------------------------
+# Repo
+# ---------------------------------------------------------------------------
+GITHUB_REPO_URL = "https://github.com/musarashid49/Image-Classification-with-CNN.git"
+DEFAULT_BRANCH = "main"

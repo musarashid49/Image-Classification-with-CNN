@@ -1,139 +1,158 @@
 """
-src/dataset.py
-==============
-Dataset and DataLoader utilities.
-Assumes the dataset on Google Drive is already split into:
-    <root>/train/<class>/...
-    <root>/val/<class>/...
-    <root>/test/<class>/...
+ImageFolder-based DataLoaders for the Pakistani Politicians dataset.
 
-Usage in Colab:
-    from src.dataset import get_dataloaders
-    loaders = get_dataloaders(train_dir, val_dir, test_dir)
+The dataset layout on Drive (after splitting) is:
+
+    dataset_resplit/
+        train/<class_name>/*.jpg
+        val/<class_name>/*.jpg
+        test/<class_name>/*.jpg
+
+We validate that:
+  1. All three split folders exist.
+  2. Every class folder from CLASS_NAMES is present in each split.
+  3. ImageFolder's class_to_idx matches the alphabetical CLASS_NAMES order
+     exactly — otherwise downstream metrics would map to wrong labels.
 """
+from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Dict, Tuple
 
 import torch
 from torch.utils.data import DataLoader
-from torchvision.datasets import ImageFolder
+from torchvision import datasets
 
-from src.transforms import get_transforms
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from config.config import BATCH_SIZE, NUM_WORKERS, CLASS_NAMES
+from config.config import (
+    BATCH_SIZE,
+    CLASS_NAMES,
+    DATASET_DIR,
+    NUM_WORKERS,
+    PIN_MEMORY,
+)
+from src.transforms import get_all_transforms
 
 
-# ─────────────────────────────────────────────
-# Dataset validation helper
-# ─────────────────────────────────────────────
-
-def validate_dataset_structure(root_dir: str, split: str) -> None:
-    """
-    Validates that the split directory has the expected class folders
-    and that each folder is non-empty.  Prints a per-class summary.
-    """
-    print(f"\n── Validating '{split}' split at: {root_dir} ──")
-    if not os.path.isdir(root_dir):
-        raise FileNotFoundError(f"Directory not found: {root_dir}")
-
-    found_classes = sorted(os.listdir(root_dir))
-    total_images  = 0
-
-    for cls in found_classes:
-        cls_path = os.path.join(root_dir, cls)
-        if not os.path.isdir(cls_path):
-            continue
-        images = [
-            f for f in os.listdir(cls_path)
-            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+def _verify_class_alignment(image_folder: datasets.ImageFolder, split_name: str) -> None:
+    """Hard-fail if ImageFolder discovered different classes than CLASS_NAMES."""
+    discovered = sorted(image_folder.classes)
+    expected = sorted(CLASS_NAMES)
+    if discovered != expected:
+        missing = set(expected) - set(discovered)
+        extra = set(discovered) - set(expected)
+        msg = [
+            f"Class mismatch in {split_name}:",
+            f"  expected ({len(expected)}): {expected}",
+            f"  found    ({len(discovered)}): {discovered}",
         ]
-        n = len(images)
-        total_images += n
-        flag = "✓" if n >= 1 else "✗ EMPTY"
-        print(f"  {flag}  {cls:<35} {n:>4} images")
-
-    print(f"\n  Total images in '{split}': {total_images}")
-    print(f"  Classes found:            {len(found_classes)}")
-
-    # Warn if a configured class is missing
-    for expected in CLASS_NAMES:
-        if expected not in found_classes:
-            print(f"  ⚠  WARNING: expected class '{expected}' not found in {split}")
+        if missing:
+            msg.append(f"  missing folders: {sorted(missing)}")
+        if extra:
+            msg.append(f"  unexpected folders: {sorted(extra)}")
+        raise RuntimeError("\n".join(msg))
 
 
-# ─────────────────────────────────────────────
-# DataLoader factory
-# ─────────────────────────────────────────────
+def build_datasets(
+    dataset_root: Path | str | None = None,
+) -> Tuple[datasets.ImageFolder, datasets.ImageFolder, datasets.ImageFolder]:
+    """Build the three ImageFolder datasets. Returns (train, val, test)."""
+    root = Path(dataset_root) if dataset_root is not None else DATASET_DIR
 
-def get_dataloaders(
-    train_dir: str,
-    val_dir:   str,
-    test_dir:  str,
-    batch_size: int  = BATCH_SIZE,
+    train_dir = root / "train"
+    val_dir = root / "val"
+    test_dir = root / "test"
+
+    for d, name in [(train_dir, "train"), (val_dir, "val"), (test_dir, "test")]:
+        if not d.exists():
+            raise FileNotFoundError(f"{name} split directory not found: {d}")
+
+    train_tf, val_tf, test_tf = get_all_transforms()
+
+    train_ds = datasets.ImageFolder(str(train_dir), transform=train_tf)
+    val_ds = datasets.ImageFolder(str(val_dir), transform=val_tf)
+    test_ds = datasets.ImageFolder(str(test_dir), transform=test_tf)
+
+    _verify_class_alignment(train_ds, "train")
+    _verify_class_alignment(val_ds, "val")
+    _verify_class_alignment(test_ds, "test")
+
+    # Sanity check: all three must agree on class_to_idx
+    if train_ds.class_to_idx != val_ds.class_to_idx:
+        raise RuntimeError("class_to_idx mismatch between train and val")
+    if train_ds.class_to_idx != test_ds.class_to_idx:
+        raise RuntimeError("class_to_idx mismatch between train and test")
+
+    return train_ds, val_ds, test_ds
+
+
+def build_dataloaders(
+    dataset_root: Path | str | None = None,
+    batch_size: int = BATCH_SIZE,
     num_workers: int = NUM_WORKERS,
-    image_size: int  = 224,
-    verbose: bool    = True,
-) -> Dict[str, DataLoader]:
+) -> Tuple[DataLoader, DataLoader, DataLoader, Dict[str, int]]:
     """
-    Builds ImageFolder datasets and wraps them in DataLoaders.
+    Build dataloaders for train/val/test.
 
-    Returns
-    -------
-    dict with keys "train", "val", "test".
-    Also prints dataset sizes when verbose=True.
+    Returns:
+        train_loader, val_loader, test_loader, class_to_idx
     """
-    datasets = {
-        "train": ImageFolder(train_dir, transform=get_transforms("train", image_size)),
-        "val":   ImageFolder(val_dir,   transform=get_transforms("val",   image_size)),
-        "test":  ImageFolder(test_dir,  transform=get_transforms("test",  image_size)),
-    }
+    train_ds, val_ds, test_ds = build_datasets(dataset_root)
 
-    loaders = {
-        "train": DataLoader(
-            datasets["train"],
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=True,
-        ),
-        "val": DataLoader(
-            datasets["val"],
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-        ),
-        "test": DataLoader(
-            datasets["test"],
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-        ),
-    }
+    # Generator pinned to a seed for reproducible shuffling
+    g = torch.Generator()
+    g.manual_seed(0)
 
-    if verbose:
-        print("\n── DataLoader Summary ──────────────────────────────────────")
-        for split, ds in datasets.items():
-            print(f"  {split:<8} {len(ds):>5} images  |  "
-                  f"{len(loaders[split]):>4} batches  |  "
-                  f"classes: {len(ds.classes)}")
-        print(f"\n  Class-to-index mapping:")
-        for cls, idx in datasets["train"].class_to_idx.items():
-            print(f"    [{idx:>2}]  {cls}")
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=PIN_MEMORY,
+        drop_last=False,
+        generator=g,
+        persistent_workers=(num_workers > 0),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=PIN_MEMORY,
+        persistent_workers=(num_workers > 0),
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=PIN_MEMORY,
+        persistent_workers=(num_workers > 0),
+    )
 
-    return loaders
+    return train_loader, val_loader, test_loader, train_ds.class_to_idx
 
 
-def get_class_to_idx(train_dir: str) -> Dict[str, int]:
-    """Returns the class→index mapping from the training ImageFolder."""
-    ds = ImageFolder(train_dir)
-    return ds.class_to_idx
-
-
-def get_idx_to_class(train_dir: str) -> Dict[int, str]:
-    """Returns the index→class mapping (inverse of class_to_idx)."""
-    return {v: k for k, v in get_class_to_idx(train_dir).items()}
+def count_images_per_class(dataset_root: Path | str | None = None) -> Dict[str, Dict[str, int]]:
+    """
+    Return {split: {class_name: n_images}} for diagnostics.
+    Used by the data audit notebook.
+    """
+    root = Path(dataset_root) if dataset_root is not None else DATASET_DIR
+    out: Dict[str, Dict[str, int]] = {}
+    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    for split in ("train", "val", "test"):
+        split_dir = root / split
+        if not split_dir.exists():
+            out[split] = {}
+            continue
+        counts: Dict[str, int] = {}
+        for cls_dir in sorted(split_dir.iterdir()):
+            if not cls_dir.is_dir():
+                continue
+            n = sum(
+                1 for p in cls_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in image_exts
+            )
+            counts[cls_dir.name] = n
+        out[split] = counts
+    return out

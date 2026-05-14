@@ -1,163 +1,230 @@
 """
-src/utils.py
-============
-Shared utility functions:
-  - reproducibility seed setter
-  - Drive mount / copy helpers (Colab)
-  - checkpoint loader
-  - pretty experiment logger
-"""
+Utilities: reproducibility, Drive sync, model cards.
 
-import os, random, shutil, json, time
+Model cards live in the GitHub repo at `results/metrics/<model>_model_card.md`
+and `.json`. They are the durable record of "which model achieved what".
+"""
+from __future__ import annotations
+
+import json
+import os
+import random
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 import numpy as np
 import torch
 
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Reproducibility
-# ─────────────────────────────────────────────
-
-def set_seed(seed: int = 42) -> None:
-    """Sets seeds for Python, NumPy, and PyTorch (CPU + CUDA)."""
+# ---------------------------------------------------------------------------
+def set_seed(seed: int = 42, deterministic: bool = False) -> None:
+    """Seed Python, NumPy, and PyTorch. Pass deterministic=True for strict but
+    slower CUDA reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark     = False
-    print(f"  Global seed set to {seed}")
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.benchmark = True
 
 
-# ─────────────────────────────────────────────
-# Google Drive helpers (Colab)
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Filesystem helpers
+# ---------------------------------------------------------------------------
+def ensure_dir(p: Path | str) -> Path:
+    p = Path(p)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
-def mount_drive() -> None:
-    """Mounts Google Drive inside Colab. No-op if not in Colab."""
+
+def safe_copy(src: Path | str, dst: Path | str) -> Path:
+    """Copy src -> dst, creating parent dirs. Returns dst."""
+    src, dst = Path(src), Path(dst)
+    ensure_dir(dst.parent)
+    shutil.copy2(src, dst)
+    return dst
+
+
+# ---------------------------------------------------------------------------
+# Drive sync (call from notebooks running on Colab)
+# ---------------------------------------------------------------------------
+def mount_drive(force_remount: bool = False) -> None:
+    """Mount Google Drive in Colab. No-op outside Colab."""
     try:
-        from google.colab import drive
-        drive.mount("/content/drive", force_remount=False)
-        print("  Google Drive mounted at /content/drive")
+        from google.colab import drive  # type: ignore
     except ImportError:
-        print("  Not running in Colab — Drive mount skipped.")
-
-
-def copy_dataset_from_drive(
-    drive_dataset_path: str,
-    local_data_dir: str = "/content/data",
-) -> None:
-    """
-    Copies the already-split dataset from Drive to local Colab SSD.
-    Expected Drive layout:
-        drive_dataset_path/
-            train/<class>/...
-            val/<class>/...
-            test/<class>/...
-    """
-    if os.path.isdir(local_data_dir) and len(os.listdir(local_data_dir)) > 0:
-        print(f"  Dataset already exists at {local_data_dir} — skipping copy.")
+        print("[mount_drive] not running on Colab — skipping.")
         return
-
-    print(f"  Copying dataset from Drive …")
-    t0 = time.time()
-    shutil.copytree(drive_dataset_path, local_data_dir)
-    elapsed = time.time() - t0
-    print(f"  Done in {elapsed:.1f}s  →  {local_data_dir}")
+    drive.mount("/content/drive", force_remount=force_remount)
 
 
-def save_results_to_drive(
-    local_results_dir: str,
-    drive_results_path: str,
-) -> None:
-    """Copies local results folder back to Drive after training."""
-    print(f"  Saving results to Drive …")
-    if os.path.isdir(drive_results_path):
-        shutil.rmtree(drive_results_path)
-    shutil.copytree(local_results_dir, drive_results_path)
-    print(f"  Results saved → {drive_results_path}")
+def copy_to_drive(local_path: Path | str, drive_path: Path | str) -> Path:
+    """Copy a file from local Colab storage to Drive. Returns the Drive path."""
+    return safe_copy(local_path, drive_path)
 
 
-# ─────────────────────────────────────────────
-# Checkpoint loader
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# JSON / CSV helpers (used for live epoch logging)
+# ---------------------------------------------------------------------------
+def write_json(obj: Any, path: Path | str) -> None:
+    path = Path(path)
+    ensure_dir(path.parent)
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2, default=str)
 
-def load_checkpoint(model, checkpoint_path: str, device: torch.device = None):
+
+def read_json(path: Path | str) -> Any:
+    with open(path) as f:
+        return json.load(f)
+
+
+def append_csv_row(path: Path | str, row: Dict[str, Any]) -> None:
+    """Append one row to a CSV file. Writes a header on first write."""
+    import csv
+    path = Path(path)
+    ensure_dir(path.parent)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+# ---------------------------------------------------------------------------
+# Model card (the durable per-model record)
+# ---------------------------------------------------------------------------
+def save_model_card(
+    model_name: str,
+    model_info: Dict,
+    training_config: Dict,
+    final_metrics: Dict,
+    training_duration_seconds: float,
+    checkpoint_drive_path: str,
+    output_dir: Path | str,
+    notebook_name: str = "",
+    notes: str = "",
+) -> Dict[str, Path]:
     """
-    Loads model weights from a checkpoint file.
-    Returns the checkpoint dict (which may contain epoch, val_acc, etc.).
+    Write both <model>_model_card.json and <model>_model_card.md to output_dir.
+    `output_dir` should be inside the GitHub repo so cards get committed.
     """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"])
-    print(f"  Checkpoint loaded: {checkpoint_path}")
-    print(f"    epoch={ckpt.get('epoch', '?')}  val_acc={ckpt.get('val_acc', '?'):.4f}")
-    return ckpt
+    output_dir = ensure_dir(output_dir)
+    timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    payload = {
+        "model_name": model_name,
+        "timestamp_utc": timestamp,
+        "notebook": notebook_name,
+        "model_info": model_info,
+        "training_config": training_config,
+        "final_metrics": final_metrics,
+        "training_duration_seconds": round(training_duration_seconds, 2),
+        "training_duration_human": _human_duration(training_duration_seconds),
+        "checkpoint_drive_path": checkpoint_drive_path,
+        "notes": notes,
+    }
+
+    json_path = output_dir / f"{model_name}_model_card.json"
+    md_path = output_dir / f"{model_name}_model_card.md"
+
+    write_json(payload, json_path)
+    md_path.write_text(_render_model_card_md(payload))
+
+    return {"json": json_path, "md": md_path}
 
 
-# ─────────────────────────────────────────────
-# Experiment logger
-# ─────────────────────────────────────────────
+def _human_duration(seconds: float) -> str:
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
+
+def _render_model_card_md(p: Dict) -> str:
+    info = p["model_info"]
+    cfg = p["training_config"]
+    m = p["final_metrics"]
+
+    def _fmt(v):
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return str(v)
+
+    cfg_rows = "\n".join(f"| `{k}` | {_fmt(v)} |" for k, v in cfg.items())
+    metric_rows = "\n".join(f"| `{k}` | {_fmt(v)} |" for k, v in m.items())
+
+    return f"""# Model Card — `{p["model_name"]}`
+
+**Timestamp (UTC):** {p["timestamp_utc"]}
+**Produced by:** `{p["notebook"]}`
+**Training duration:** {p["training_duration_human"]}
+**Checkpoint on Drive:** `{p["checkpoint_drive_path"]}`
+
+## Architecture
+- Backbone: `{info.get("model_name", "?")}`
+- Input size: {info.get("input_size", "?")}×{info.get("input_size", "?")}
+- Total parameters: {info.get("total_params", "?"):,} ({info.get("total_params_M", "?")}M)
+- Trainable parameters: {info.get("trainable_params", "?"):,}
+
+## Training configuration
+| key | value |
+|---|---|
+{cfg_rows}
+
+## Final test metrics
+| metric | value |
+|---|---|
+{metric_rows}
+
+## Notes
+{p["notes"] or "_(none)_"}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Experiment log (lightweight, append-only)
+# ---------------------------------------------------------------------------
 class ExperimentLogger:
-    """
-    Lightweight JSON-based experiment tracker.
-    Creates / appends to experiments/experiment_log.json.
+    """Append-only JSON-lines logger for run summaries."""
 
-    Usage:
-        logger = ExperimentLogger()
-        logger.log(model_name="resnet50", val_acc=0.93, ...)
-    """
-    def __init__(self, log_path: str = "experiments/experiment_log.json"):
-        self.log_path = log_path
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        if not os.path.isfile(log_path):
-            with open(log_path, "w") as f:
-                json.dump([], f)
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+        ensure_dir(self.path.parent)
 
-    def log(self, **kwargs) -> None:
-        kwargs["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.log_path, "r") as f:
-            records = json.load(f)
-        records.append(kwargs)
-        with open(self.log_path, "w") as f:
-            json.dump(records, f, indent=2)
-        print(f"  Experiment logged → {self.log_path}")
-        for k, v in kwargs.items():
-            print(f"    {k}: {v}")
-
-    def get_all(self):
-        with open(self.log_path, "r") as f:
-            return json.load(f)
+    def log(self, entry: Dict[str, Any]) -> None:
+        entry = {"timestamp_utc": datetime.utcnow().isoformat() + "Z", **entry}
+        with open(self.path, "a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
 
 
-# ─────────────────────────────────────────────
-# Dataset split verifier
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Pretty print
+# ---------------------------------------------------------------------------
+def format_metrics(metrics: Dict[str, float]) -> str:
+    return " | ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                      for k, v in metrics.items())
 
-def verify_no_leakage(train_dir: str, val_dir: str, test_dir: str) -> None:
-    """
-    Checks for filename overlap across splits.
-    Raises AssertionError if leakage is detected.
-    """
-    def get_filenames(root):
-        names = set()
-        for cls in os.listdir(root):
-            cls_path = os.path.join(root, cls)
-            if os.path.isdir(cls_path):
-                for f in os.listdir(cls_path):
-                    names.add(f)
-        return names
 
-    train_files = get_filenames(train_dir)
-    val_files   = get_filenames(val_dir)
-    test_files  = get_filenames(test_dir)
+def get_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    tv = train_files & val_files
-    tt = train_files & test_files
-    vt = val_files   & test_files
 
-    assert len(tv) == 0, f"LEAKAGE: {len(tv)} files shared between train and val!"
-    assert len(tt) == 0, f"LEAKAGE: {len(tt)} files shared between train and test!"
-    assert len(vt) == 0, f"LEAKAGE: {len(vt)} files shared between val and test!"
-    print("  ✓ No leakage detected between train / val / test splits.")
+def gpu_info() -> Optional[str]:
+    if not torch.cuda.is_available():
+        return None
+    name = torch.cuda.get_device_name(0)
+    mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+    return f"{name} ({mem_gb:.1f} GB)"

@@ -1,137 +1,144 @@
-# Pakistani Politicians Image Classification
+# Pakistani Politicians Image Classification (CNN)
 
-Multi-class facial image classification of **16 Pakistani public figures** using pretrained CNNs (ResNet-50, EfficientNet-B0/B2).
+16-class facial image classification of Pakistani political and military figures, using transfer learning with two pretrained CNN backbones. Target test accuracy: **≥90%**.
 
-> Academic project — Deep Learning course assignment.
-
----
-
-## 📋 Project Overview
-
-| Item | Detail |
+| Model A | Model B |
 |---|---|
-| Task | 16-class facial image classification |
-| Models | ResNet-50, EfficientNet-B0 (+ optional B2) |
-| Dataset | Self-collected, 80–250 images per class |
-| Split | 75% Train / 15% Val / 10% Test |
-| Framework | PyTorch + torchvision |
-| Training | Google Colab A100 |
+| ResNet-50 (ImageNet) | EfficientNet-B2 (ImageNet) |
+
+Final deliverables: trained model checkpoints, evaluation metrics, IEEE-styled figures (PNG + PDF), and a model-comparison report.
 
 ---
 
-## 📁 Repository Structure
+## Classes (16)
+
+`Asif_Ali_Zardari, Asim_Munir, Bilawal_Bhutto, Hamza_Shahbaz, Imran_Khan, Maryam_Nawaz, Maulana_Fazal_ur_Rehman, Mehmood_Khan_Achakzai, Mehmood_Qureshi, Nawaz_Sharif, Pervez_Khattak, Qamar_Javed_Bajwa, Sheikh_Rasheed_Ahmed, Shehbaz_Sharif, Sirajul_Haq, Yousaf_Raza_Gillani`
+
+Dataset: ~1,428 images, split 75 / 15 / 10 (train / val / test) with a minimum of 5 test images per class enforced.
+
+---
+
+## Repository layout
 
 ```
-pk_politicians_clf/
+.
 ├── config/
-│   └── config.py               ← All hyperparameters & paths (edit here first)
+│   └── config.py                  # All paths, hyperparameters, class names
 ├── src/
-│   ├── transforms.py           ← Train/val/test augmentation pipelines
-│   ├── dataset.py              ← ImageFolder DataLoaders
-│   ├── models.py               ← ResNet50 / EfficientNet factory
-│   ├── train.py                ← Training loop with early stopping
-│   ├── evaluate.py             ← Metrics, confusion matrix, plots
-│   └── utils.py                ← Seed, Drive helpers, experiment logger
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_split_and_verify.ipynb
-│   ├── 03_train_resnet50.ipynb
-│   ├── 04_train_efficientnet.ipynb
-│   └── 05_evaluation_and_plots.ipynb
+│   ├── transforms.py              # Train + eval image transforms
+│   ├── dataset.py                 # ImageFolder loaders + class alignment check
+│   ├── models.py                  # Model builders (ResNet, EfficientNet, VGG)
+│   ├── train.py                   # Trainer with crash-resilient per-epoch saves
+│   ├── evaluate.py                # Metrics + IEEE-styled plots (PNG + PDF)
+│   └── utils.py                   # Drive mount, JSON/CSV writers, model cards
 ├── scripts/
-│   ├── split_dataset.py        ← CLI: split raw → train/val/test
-│   ├── verify_dataset.py       ← CLI: quality control checks
-│   └── export_results.py       ← CLI: build summary CSVs
-├── experiments/
-│   └── experiment_log.json     ← Auto-generated run history
+│   └── split_dataset.py           # Idempotent 75/15/10 splitter
+├── notebooks/
+│   ├── 01_setup_and_data_audit.ipynb
+│   ├── 02_split_dataset.ipynb
+│   ├── 03_train_model_A.ipynb           (ResNet-50)
+│   ├── 04_train_model_B.ipynb           (EfficientNet-B2)
+│   ├── 05_evaluation_and_figures.ipynb
+│   └── 06_misclassification_analysis.ipynb
 ├── results/
-│   ├── plots/                  ← Saved PNG figures (gitignored binaries)
-│   ├── metrics/                ← JSON reports & CSV tables
-│   └── checkpoints/            ← Best model .pth files (gitignored)
-├── data/                       ← Gitignored — stored on Google Drive
-├── report/figures/             ← Copy plots here for IEEE report
+│   ├── metrics/                   # JSON metrics, model cards, CSV logs
+│   └── plots/                     # PNG + PDF figures
+├── report/
+│   └── figures/                   # Copies of figures for Overleaf
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## ⚡ Quick Start
+## How to run (Colab)
 
-### 1. Clone the repo
-```bash
-git clone https://github.com/YOUR_USERNAME/pk_politicians_clf.git
-cd pk_politicians_clf
-pip install -r requirements.txt
-```
+The dataset lives on Google Drive at `/content/drive/MyDrive/dataset_resplit`. Checkpoints and per-epoch logs are saved to `/content/drive/MyDrive/pk_politicians_results/` **immediately during training** so a session crash does not lose progress.
 
-### 2. Configure paths
-Edit `config/config.py`:
+Run the notebooks in order:
+
+1. **01_setup_and_data_audit** — verifies dataset is present, counts images per class per split, hard-fails if any class has fewer than 5 test images. Writes `results/metrics/dataset_audit.json`.
+2. **02_split_dataset** — idempotent. Skips if the split already looks correct. Use `--force` flag inside the notebook to re-split.
+3. **03_train_model_A** — trains ResNet-50. Set `RESUME = True` to continue from the latest checkpoint after a crash; set `FORCE_RETRAIN = True` to start fresh.
+4. **04_train_model_B** — same template, EfficientNet-B2.
+5. **05_evaluation_and_figures** — loads both checkpoints from Drive, computes test metrics, generates the comparison figure and `results/metrics/model_comparison.csv`.
+6. **06_misclassification_analysis** — confusion-pair analysis, most-confidently-wrong gallery, barely-wrong margin analysis, per-class accuracy ranking. Set `MODEL_NAME` at the top of the notebook to switch between models.
+
+Every notebook clones this GitHub repo at the start so you always run the latest code.
+
+---
+
+## Crash recovery (this is the key change from the prior build)
+
+Per-epoch, the trainer writes to **local AND Drive**:
+- `epoch_log.csv` — appended after each epoch
+- `history.json` — overwritten after each epoch
+- `<model>_best.pth` — saved on every val-accuracy improvement, includes optimizer + scheduler + epoch number + best_val_acc + full history (a true full-state checkpoint)
+
+If the Colab runtime dies mid-training:
+
 ```python
-DRIVE_DATASET_PATH = "/content/drive/MyDrive/YOUR_DATASET_FOLDER"
-DRIVE_RESULTS_PATH = "/content/drive/MyDrive/YOUR_RESULTS_FOLDER"
+RESUME = True
+FORCE_RETRAIN = False
 ```
 
-### 3. Run notebooks in order (on Colab A100)
-| # | Notebook | Purpose |
-|---|---|---|
-| 01 | `01_data_exploration.ipynb` | Inspect raw dataset, detect corrupt images |
-| 02 | `02_split_and_verify.ipynb` | 75/15/10 split + leakage check |
-| 03 | `03_train_resnet50.ipynb` | Train & evaluate ResNet-50 |
-| 04 | `04_train_efficientnet.ipynb` | Train & evaluate EfficientNet-B0 |
-| 05 | `05_evaluation_and_plots.ipynb` | Final comparison & report figures |
+…then re-run the training notebook. It will pick up from the last saved epoch with the optimizer and LR scheduler restored.
 
 ---
 
-## 🧑‍🤝‍🧑 Classes (16)
+## Reproducibility
 
-| Index | Folder Name |
-|---|---|
-| 0 | asif_ali_zardari |
-| 1 | bilawal_bhutto |
-| 2 | chaudhry_shujaat |
-| 3 | fazlur_rehman |
-| 4 | imran_khan |
-| 5 | ishaq_dar |
-| 6 | khawaja_asif |
-| 7 | maryam_nawaz |
-| 8 | moeed_yusuf |
-| 9 | nawaz_sharif |
-| 10 | pervaiz_elahi |
-| 11 | pervez_musharraf |
-| 12 | raheel_sharif |
-| 13 | shehbaz_sharif |
-| 14 | siraj_ul_haq |
-| 15 | zahid_hamid |
+- Seed: `42` (set in `config/config.py`, applied via `src.utils.set_seed`)
+- Image size: `224×224`
+- Batch size: `32`
+- All hyperparameters and run metadata are written to a model card (`.json` + `.md`) under `results/metrics/` after each training run.
 
 ---
 
-## 📊 Evaluation Targets
+## First-time GitHub setup (foolproof)
 
-- ≥ 90% overall test accuracy
-- Per-class precision, recall, F1
-- Confusion matrix heatmap
-- Training vs. validation loss/accuracy curves
-- Top-5 misclassified samples
+The repo's default branch is **`main`**. If your local clone is on `master`, rename it before the first push:
+
+```bash
+# from inside the repo root
+git branch -m master main
+git fetch origin
+git branch -u origin/main main   # only if origin/main already exists
+git remote set-head origin -a    # only if origin/main already exists
+```
+
+If `origin/main` does **not** yet exist on GitHub, do the first push like this:
+
+```bash
+git add .
+git commit -m "Rebuild: crash-resilient training pipeline + 6 notebooks"
+git push -u origin main
+```
+
+Then on GitHub: **Settings → Branches → Default branch → change to `main`** if it was previously `master`. After that, `master` can be deleted on GitHub.
+
+For subsequent commits from a Colab notebook (after training a model):
+
+```python
+%cd /content/<repo-folder>
+!git config user.email "you@example.com"
+!git config user.name  "Your Name"
+!git add results/metrics/ results/plots/ report/figures/
+!git commit -m "Add ResNet-50 model card and figures"
+!git push origin main
+```
+
+You will be prompted for your GitHub username and a **personal access token** (not your password) the first time. Generate one at GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → `repo` scope.
 
 ---
 
-## ⚠️ Important Rules
+## Hardware
 
-- **Augmentation is only applied to training data** — val and test use deterministic transforms.
-- **Split before augmentation** — the `split_dataset.py` script handles raw images only.
-- **No data leakage** — verified by `src/utils.py::verify_no_leakage()`.
-- Dataset images are **not committed to GitHub** — stored on Google Drive.
-- Model checkpoints are **not committed** — stored on Google Drive.
+Training is done on Google Colab with an A100 GPU. ResNet-50 takes ~10 minutes for 35 epochs at batch size 32; EfficientNet-B2 takes ~15 minutes.
 
 ---
 
-## 📄 Report
+## Notes
 
-IEEE-format report written in Overleaf. Figures exported from `results/plots/` → `report/figures/`.
-
----
-
-## 🛠 Tech Stack
-
-`PyTorch` · `torchvision` · `scikit-learn` · `matplotlib` · `seaborn` · `Pillow` · `pandas`
+- `scripts/extract_rar.py` from the prior build is **no longer used** — the dataset is already extracted on Drive. Safe to delete.
+- All figures are saved as both PNG (300 DPI) and PDF (vector, with editable text, `pdf.fonttype = 42`) so they can be dropped into Overleaf without rasterization artifacts.

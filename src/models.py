@@ -1,130 +1,122 @@
 """
-src/models.py
-=============
-Model factory for ResNet50, EfficientNet-B0, and EfficientNet-B2.
-All models are loaded with ImageNet pretrained weights and their
-classifier heads replaced for 16-class output.
+Pretrained CNN backbones with replaced classification heads.
 
-Usage:
-    from src.models import build_model
-    model = build_model("resnet50", num_classes=16, dropout=0.4)
+Supported (per project_rules.md and Project_Brief.docx):
+    resnet50, resnet101, efficientnet_b0, efficientnet_b2, efficientnet_b3, vgg16
+
+The factory returns:
+    model, info_dict
+where info_dict carries metadata used in the model card.
 """
-from typing import Tuple 
+from __future__ import annotations
+
+from typing import Dict, Tuple
+
 import torch
 import torch.nn as nn
-import torchvision.models as tv_models
-from torchvision.models import (
-    ResNet50_Weights,
-    EfficientNet_B0_Weights,
-    EfficientNet_B2_Weights,
-)
+from torchvision import models
 
-import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from config.config import NUM_CLASSES
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal builders
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _build_resnet50(num_classes: int, dropout: float, freeze_base: bool) -> nn.Module:
-    model = tv_models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
-    if freeze_base:
-        for param in model.parameters():
-            param.requires_grad = False
-    in_features = model.fc.in_features
-    model.fc = nn.Sequential(
-        nn.Dropout(p=dropout),
-        nn.Linear(in_features, num_classes),
-    )
-    return model
-
-
-def _build_efficientnet_b0(num_classes: int, dropout: float, freeze_base: bool) -> nn.Module:
-    model = tv_models.efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
-    if freeze_base:
-        for param in model.features.parameters():
-            param.requires_grad = False
-    in_features = model.classifier[1].in_features
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=dropout, inplace=True),
-        nn.Linear(in_features, num_classes),
-    )
-    return model
-
-
-def _build_efficientnet_b2(num_classes: int, dropout: float, freeze_base: bool) -> nn.Module:
-    model = tv_models.efficientnet_b2(weights=EfficientNet_B2_Weights.IMAGENET1K_V1)
-    if freeze_base:
-        for param in model.features.parameters():
-            param.requires_grad = False
-    in_features = model.classifier[1].in_features
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=dropout, inplace=True),
-        nn.Linear(in_features, num_classes),
-    )
-    return model
-
-
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Public factory
-# ─────────────────────────────────────────────────────────────────────────────
-
-SUPPORTED_MODELS = ("resnet50", "efficientnet_b0", "efficientnet_b2")
-
-
-def build_model(
-    model_name: str,
-    num_classes: int = NUM_CLASSES,
-    dropout: float   = 0.4,
-    freeze_base: bool = False,
-) -> nn.Module:
+# ---------------------------------------------------------------------------
+def build_model(name: str, num_classes: int = NUM_CLASSES, dropout: float = 0.2) -> Tuple[nn.Module, Dict]:
     """
-    Build and return a pretrained CNN with a custom classification head.
+    Build a pretrained CNN with its classifier replaced for `num_classes`.
 
-    Parameters
-    ----------
-    model_name   : str   — one of: 'resnet50', 'efficientnet_b0', 'efficientnet_b2'
-    num_classes  : int   — number of output classes (default 16)
-    dropout      : float — dropout rate before final linear layer
-    freeze_base  : bool  — if True, backbone weights are frozen (feature extraction only)
-
-    Returns
-    -------
-    torch.nn.Module  (ready for .to(device) and training)
+    Returns (model, info) where `info` contains the metadata used in
+    model cards (total/trainable params, input_size, backbone).
     """
-    model_name = model_name.lower().strip()
-    assert model_name in SUPPORTED_MODELS, \
-        f"Unknown model '{model_name}'. Choose from: {SUPPORTED_MODELS}"
+    name = name.lower().strip()
 
-    builders = {
-        "resnet50":         _build_resnet50,
-        "efficientnet_b0":  _build_efficientnet_b0,
-        "efficientnet_b2":  _build_efficientnet_b2,
+    if name == "resnet50":
+        m = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        in_features = m.fc.in_features
+        m.fc = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, num_classes),
+        )
+        info = _make_info(name, m, input_size=224)
+    elif name == "resnet101":
+        m = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
+        in_features = m.fc.in_features
+        m.fc = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, num_classes),
+        )
+        info = _make_info(name, m, input_size=224)
+    elif name == "efficientnet_b0":
+        m = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        in_features = m.classifier[-1].in_features
+        m.classifier[-1] = nn.Linear(in_features, num_classes)
+        info = _make_info(name, m, input_size=224)
+    elif name == "efficientnet_b2":
+        m = models.efficientnet_b2(weights=models.EfficientNet_B2_Weights.DEFAULT)
+        in_features = m.classifier[-1].in_features
+        m.classifier[-1] = nn.Linear(in_features, num_classes)
+        info = _make_info(name, m, input_size=224)
+    elif name == "efficientnet_b3":
+        m = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
+        in_features = m.classifier[-1].in_features
+        m.classifier[-1] = nn.Linear(in_features, num_classes)
+        info = _make_info(name, m, input_size=224)
+    elif name == "vgg16":
+        m = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
+        in_features = m.classifier[-1].in_features
+        m.classifier[-1] = nn.Linear(in_features, num_classes)
+        info = _make_info(name, m, input_size=224)
+    else:
+        raise ValueError(
+            f"Unknown model '{name}'. Supported: resnet50, resnet101, "
+            f"efficientnet_b0, efficientnet_b2, efficientnet_b3, vgg16"
+        )
+
+    return m, info
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def count_parameters(model: nn.Module) -> Tuple[int, int]:
+    """Returns (total_params, trainable_params)."""
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total, trainable
+
+
+def _make_info(name: str, model: nn.Module, input_size: int) -> Dict:
+    total, trainable = count_parameters(model)
+    return {
+        "model_name": name,
+        "input_size": input_size,
+        "total_params": total,
+        "trainable_params": trainable,
+        "total_params_M": round(total / 1e6, 2),
     }
 
-    model = builders[model_name](num_classes, dropout, freeze_base)
 
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in model.parameters())
-    print(f"  [{model_name}]  trainable params: {trainable:,} / {total:,}")
-    return model
+def get_param_groups(model: nn.Module, lr_head: float, lr_backbone: float, weight_decay: float):
+    """
+    Two-LR optimisation: a higher LR for the new classifier head and a smaller
+    LR for the pretrained backbone. Identifying the head differs per model.
+    """
+    # Decide which parameter names are "head" vs "backbone"
+    head_keys = []
+    if hasattr(model, "fc"):  # ResNet family
+        head_keys.append("fc.")
+    if hasattr(model, "classifier"):  # EfficientNet, VGG, DenseNet
+        head_keys.append("classifier.")
 
+    head_params, backbone_params = [], []
+    for name, p in model.named_parameters():
+        if any(name.startswith(k) for k in head_keys):
+            head_params.append(p)
+        else:
+            backbone_params.append(p)
 
-def count_parameters(model: nn.Module) -> Tuple[int, int]:
-    """Returns (trainable_params, total_params)."""
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in model.parameters())
-    return trainable, total
-
-
-# Quick sanity check
-if __name__ == "__main__":
-    from typing import Tuple
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    for name in SUPPORTED_MODELS:
-        m = build_model(name).to(device)
-        x = torch.randn(2, 3, 224, 224).to(device)
-        out = m(x)
-        print(f"  {name}  →  output shape: {out.shape}")   # (2, 16)
+    return [
+        {"params": backbone_params, "lr": lr_backbone, "weight_decay": weight_decay},
+        {"params": head_params, "lr": lr_head, "weight_decay": weight_decay},
+    ]

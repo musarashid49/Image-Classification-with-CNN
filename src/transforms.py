@@ -1,77 +1,62 @@
 """
-src/transforms.py
-=================
-Torchvision transform pipelines for train / val / test splits.
-Augmentation is ONLY applied to training data — never val or test.
-Import and use get_transforms() in your DataLoader setup.
+Image transforms for train / val / test.
+
+CRITICAL: augmentation is applied to TRAINING DATA ONLY.
+The val and test transforms must be deterministic (resize -> centre-crop ->
+normalise). Any randomness in val/test = data leakage on metrics.
 """
+from __future__ import annotations
 
-import torchvision.transforms as T
-import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from config.config import (
-    IMAGE_SIZE, IMAGENET_MEAN, IMAGENET_STD,
-    AUG_ROTATION, AUG_FLIP, AUG_BRIGHTNESS,
-    AUG_CONTRAST, AUG_CROP_SCALE_LOW,
-)
+from typing import Tuple
+
+from torchvision import transforms
+
+from config.config import IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD
 
 
-def get_transforms(split: str, image_size: int = IMAGE_SIZE) -> T.Compose:
+def _resize_target() -> int:
+    """Slightly larger than IMG_SIZE so centre-crop has something to bite."""
+    return int(IMG_SIZE * 1.15)  # 224 -> 257
+
+
+def get_train_transform() -> transforms.Compose:
     """
-    Returns the appropriate transform pipeline for a given split.
-
-    Parameters
-    ----------
-    split : str
-        One of "train", "val", "test".
-    image_size : int
-        Target spatial resolution (default from config).
-
-    Returns
-    -------
-    torchvision.transforms.Compose
+    Training augmentation: rotation, flipping, brightness, zoom (RandomResizedCrop),
+    cropping. All five techniques required by project_rules.md are present.
     """
-    assert split in ("train", "val", "test"), \
-        f"split must be 'train', 'val', or 'test', got '{split}'"
-
-    if split == "train":
-        return T.Compose([
-            # ── Geometric augmentations ──────────────────────────────────
-            T.RandomResizedCrop(
-                image_size,
-                scale=(AUG_CROP_SCALE_LOW, 1.0),   # slight zoom / crop
-                ratio=(0.85, 1.15),
-            ),
-            T.RandomHorizontalFlip(p=0.5 if AUG_FLIP else 0.0),
-            T.RandomRotation(degrees=AUG_ROTATION),
-            # ── Photometric augmentations ─────────────────────────────────
-            T.ColorJitter(
-                brightness=AUG_BRIGHTNESS,
-                contrast=AUG_CONTRAST,
-                saturation=0.1,
-                hue=0.05,
-            ),
-            # ── Normalise ─────────────────────────────────────────────────
-            T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ])
-
-    else:   # val or test — deterministic, no augmentation
-        return T.Compose([
-            T.Resize(int(image_size * 1.14)),   # slight over-size then centre-crop
-            T.CenterCrop(image_size),
-            T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ])
+    return transforms.Compose([
+        # Zoom + crop (scale=zoom range, ratio=aspect)
+        transforms.RandomResizedCrop(
+            IMG_SIZE,
+            scale=(0.75, 1.0),     # zoom
+            ratio=(0.85, 1.15),
+        ),
+        transforms.RandomHorizontalFlip(p=0.5),                    # flipping
+        transforms.RandomRotation(degrees=15),                     # rotation
+        transforms.ColorJitter(
+            brightness=0.25,                                       # brightness
+            contrast=0.15,
+            saturation=0.15,
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        # Mild erasing for occlusion robustness (faces in news photos vary a lot)
+        transforms.RandomErasing(p=0.15, scale=(0.02, 0.10)),
+    ])
 
 
-if __name__ == "__main__":
-    # Quick sanity check
-    from PIL import Image
-    import numpy as np
+def get_eval_transform() -> transforms.Compose:
+    """Deterministic transform for validation and test."""
+    return transforms.Compose([
+        transforms.Resize(_resize_target()),
+        transforms.CenterCrop(IMG_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
 
-    dummy = Image.fromarray(np.uint8(np.random.rand(300, 300, 3) * 255))
-    for s in ("train", "val", "test"):
-        tfm = get_transforms(s)
-        out = tfm(dummy)
-        print(f"[{s}] output tensor shape: {out.shape}")   # expect torch.Size([3, 224, 224])
+
+def get_all_transforms() -> Tuple[transforms.Compose, transforms.Compose, transforms.Compose]:
+    """Convenience: returns (train_tf, val_tf, test_tf). Val and test are the same."""
+    train_tf = get_train_transform()
+    eval_tf = get_eval_transform()
+    return train_tf, eval_tf, eval_tf
