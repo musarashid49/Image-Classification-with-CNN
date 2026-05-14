@@ -14,22 +14,22 @@ from typing import List
 # ---------------------------------------------------------------------------
 # Keep these alphabetised so ImageFolder gives the same class_to_idx every run.
 CLASS_NAMES: List[str] = sorted([
+    "ahmed_sharif_chaudhry",
+    "altaf_hussain",
+    "asfandyar_wali",
     "asif_ali_zardari",
-    "benazir_bhutto",
-    "bilawal_bhutto_zardari",
-    "fazal_ur_rehman",
+    "bilawal_bhutto",
+    "chaudhry_nisar",
+    "fazlur_rehman",
     "imran_khan",
-    "ishaq_dar",
-    "khawaja_asif",
-    "mahmood_khan_achakzai",
     "maryam_nawaz",
     "nawaz_sharif",
+    "pervez_khattak",
     "pervez_musharraf",
     "rana_sanaullah",
-    "shahbaz_sharif",
-    "sheikh_rasheed",
-    "yousaf_raza_gillani",
-    "asim_munir",  # military spokesperson / COAS — adjust if folder differs
+    "shah_mehmood_qureshi",
+    "shehbaz_sharif",
+    "sirajul_haq",
 ])
 
 NUM_CLASSES: int = len(CLASS_NAMES)
@@ -48,8 +48,14 @@ CHECKPOINTS_DRIVE = RESULTS_DRIVE / "checkpoints"
 PLOTS_DRIVE = RESULTS_DRIVE / "plots"
 LOGS_DRIVE = RESULTS_DRIVE / "logs"
 
-# Local (Colab session) workspace — wiped on disconnect
-LOCAL_ROOT = Path("/content/Image-Classification-with-CNN")
+# ---------------------------------------------------------------------------
+# Repo root — resolved dynamically so it works on Colab AND local Mac.
+# config/ sits one level below the repo root, so parent.parent = repo root.
+# ---------------------------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Local workspace paths — relative to REPO_ROOT, work everywhere
+LOCAL_ROOT = REPO_ROOT
 LOCAL_RESULTS = LOCAL_ROOT / "results"
 LOCAL_PLOTS = LOCAL_RESULTS / "plots"
 LOCAL_CHECKPOINTS = LOCAL_RESULTS / "checkpoints"
