@@ -141,43 +141,6 @@ FORCE_RETRAIN = False
 
 ---
 
-## First-time GitHub setup (foolproof)
-
-The repo's default branch is **`main`**. If your local clone is on `master`, rename it before the first push:
-
-```bash
-# from inside the repo root
-git branch -m master main
-git fetch origin
-git branch -u origin/main main   # only if origin/main already exists
-git remote set-head origin -a    # only if origin/main already exists
-```
-
-If `origin/main` does **not** yet exist on GitHub, do the first push like this:
-
-```bash
-git add .
-git commit -m "Rebuild: crash-resilient training pipeline + 6 notebooks"
-git push -u origin main
-```
-
-Then on GitHub: **Settings → Branches → Default branch → change to `main`** if it was previously `master`. After that, `master` can be deleted on GitHub.
-
-For subsequent commits from a Colab notebook (after training a model):
-
-```python
-%cd /content/<repo-folder>
-!git config user.email "you@example.com"
-!git config user.name  "Your Name"
-!git add results/metrics/ results/plots/ report/figures/
-!git commit -m "Add ResNet-50 model card and figures"
-!git push origin main
-```
-
-You will be prompted for your GitHub username and a **personal access token** (not your password) the first time. Generate one at GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → `repo` scope.
-
----
-
 ## Hardware
 
 Training is done on Google Colab with an A100 (40 GB) GPU. ResNet-50 takes ~10 minutes for 35 epochs at batch size 32; EfficientNet-B2 takes ~15 minutes.
